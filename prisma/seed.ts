@@ -135,6 +135,25 @@ async function main() {
     });
   }
 
+  // StaffService mappings for Luxe Studio:
+  // Marcus (Barber): Classic Cut, Beard Trim, Executive Package
+  await (prisma as any).staffService.createMany({
+    data: [
+      { staffId: staffMarcus.id, serviceId: svcClassicCut.id },
+      { staffId: staffMarcus.id, serviceId: svcBeardTrim.id },
+      { staffId: staffMarcus.id, serviceId: svcExecutive.id },
+    ],
+  });
+
+  // Elena (Stylist/Colorist): Classic Cut, Executive Package, Color Camo
+  await (prisma as any).staffService.createMany({
+    data: [
+      { staffId: staffElena.id, serviceId: svcClassicCut.id },
+      { staffId: staffElena.id, serviceId: svcExecutive.id },
+      { staffId: staffElena.id, serviceId: svcColor.id },
+    ],
+  });
+
   // Customers for Luxe Studio
   const customerJordan = await prisma.customer.create({
     data: {
@@ -263,6 +282,17 @@ async function main() {
     },
   });
 
+  const staffLiam = await prisma.staff.create({
+    data: {
+      businessId: auraBusiness.id,
+      name: "Liam Vance, LMT",
+      email: "liam@aurawellness.com",
+      role: "Sports Massage Therapist",
+      avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
+      active: true,
+    },
+  });
+
   for (let day = 1; day <= 5; day++) {
     await prisma.workingHours.create({
       data: {
@@ -272,7 +302,27 @@ async function main() {
         endMin: 960, // 4:00 PM
       },
     });
+
+    await prisma.workingHours.create({
+      data: {
+        staffId: staffLiam.id,
+        weekday: day,
+        startMin: 540, // 9:00 AM
+        endMin: 1020, // 5:00 PM
+      },
+    });
   }
+
+  // StaffService mappings for Aura Wellness:
+  // Dr. Chloe: Initial Assessment
+  await (prisma as any).staffService.create({
+    data: { staffId: staffChloe.id, serviceId: auraSvcPT.id },
+  });
+
+  // Liam: Deep Tissue Massage
+  await (prisma as any).staffService.create({
+    data: { staffId: staffLiam.id, serviceId: auraSvcMassage.id },
+  });
 
   console.log("✅ Database seeded successfully!");
   console.log(`- Created Business 1: ${luxeBusiness.name} (slug: ${luxeBusiness.slug})`);

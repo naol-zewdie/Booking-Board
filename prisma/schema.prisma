@@ -42,8 +42,22 @@ model Staff {
   workingHours WorkingHours[]
   timeOff      StaffTimeOff[]
   appointments Appointment[]
+  staffServices StaffService[]
 
   @@index([businessId])
+}
+
+model StaffService {
+  id        String   @id @default(cuid())
+  staffId   String
+  serviceId String
+
+  staff   Staff   @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([staffId, serviceId])
+  @@index([staffId])
+  @@index([serviceId])
 }
 
 model WorkingHours {
@@ -83,8 +97,9 @@ model Service {
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
 
-  business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  appointments Appointment[]
+  business      Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  appointments  Appointment[]
+  staffServices StaffService[]
 
   @@index([businessId])
 }

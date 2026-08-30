@@ -40,10 +40,14 @@ export async function GET(req: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Service not found or inactive" }, { status: 404 });
     }
 
-    // 3. Fetch Staff Members (specific staff or all active)
+    // 3. Fetch Staff Members who perform this service (specific staff or all eligible active staff)
     const staffQuery: any = {
       businessId: business.id,
       active: true,
+      OR: [
+        { staffServices: { some: { serviceId: service.id } } },
+        { staffServices: { none: {} } }, // fallback if business hasn't restricted staff services
+      ],
     };
 
     if (validatedQuery.staffId && validatedQuery.staffId !== "any") {

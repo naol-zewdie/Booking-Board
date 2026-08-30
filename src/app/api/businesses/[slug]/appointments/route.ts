@@ -44,13 +44,20 @@ export async function POST(req: Request, { params }: RouteParams) {
     const requestedEnd = addMinutes(requestedStart, service.durationMin);
 
     // 3. Atomic Transaction for Collision Prevention & Booking Creation
-    const result = await db.$transaction(async (tx: Prisma.TransactionClient) => {
+    const result = await db.$transaction(async (tx: any) => {
       let targetStaffId = validatedData.staffId;
 
-      // If no specific staffId provided, find the first available active staff member
+      // If no specific staffId provided, find the first available active staff member who performs this service
       if (!targetStaffId || targetStaffId === "any") {
         const activeStaffList = await tx.staff.findMany({
-          where: { businessId: business.id, active: true },
+          where: {
+            businessId: business.id,
+            active: true,
+            OR: [
+              { staffServices: { some: { serviceId: service.id } } },
+              { staffServices: { none: {} } },
+            ],
+          },
           include: {
             workingHours: true,
             timeOff: true,
@@ -101,12 +108,16 @@ export async function POST(req: Request, { params }: RouteParams) {
 
         targetStaffId = chosenStaff.id;
       } else {
-        // Verify target staff belongs to business and is active
+        // Verify target staff belongs to business, is active, and is qualified for this service
         const staff = await tx.staff.findFirst({
           where: {
             id: targetStaffId,
             businessId: business.id,
             active: true,
+            OR: [
+              { staffServices: { some: { serviceId: service.id } } },
+              { staffServices: { none: {} } },
+            ],
           },
           include: {
             workingHours: true,
