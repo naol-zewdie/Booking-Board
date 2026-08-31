@@ -14,6 +14,8 @@ export interface BookingServiceItem {
   priceCents: number;
   bufferMin: number;
   color?: string | null;
+  paymentRequirement?: string;
+  depositAmountCents?: number;
   active: boolean;
 }
 

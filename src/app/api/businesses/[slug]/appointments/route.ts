@@ -4,6 +4,12 @@ import { Prisma } from "@prisma/client";
 import db from "@/lib/db";
 import { createAppointmentSchema } from "@/lib/validations/appointment";
 import { generateSlots } from "@/lib/availability/engine";
+import { generateAppointmentToken } from "@/lib/auth/tokens";
+import { dispatchBookingConfirmation } from "@/lib/notifications/service";
+import { enqueueAppointmentReminders } from "@/lib/queue/reminderQueue";
+import { createCheckoutSession } from "@/lib/payments/stripe";
+import { enqueuePaymentTimeout } from "@/lib/queue/paymentTimeoutQueue";
+import { isExclusionOrCollisionError } from "@/lib/utils";
 
 interface RouteParams {
   params: { slug: string };
@@ -20,7 +26,7 @@ export async function POST(req: Request, { params }: RouteParams) {
     }
 
     // 1. Fetch Business
-    const business = await db.business.findUnique({
+    const business: any = await (db as any).business.findUnique({
       where: { slug: params.slug },
     });
 
@@ -29,7 +35,7 @@ export async function POST(req: Request, { params }: RouteParams) {
     }
 
     // 2. Fetch Service
-    const service = await db.service.findFirst({
+    const service: any = await (db as any).service.findFirst({
       where: {
         id: validatedData.serviceId,
         businessId: business.id,
@@ -42,6 +48,8 @@ export async function POST(req: Request, { params }: RouteParams) {
     }
 
     const requestedEnd = addMinutes(requestedStart, service.durationMin);
+    const requiresPayment = service.paymentRequirement === "DEPOSIT" || service.paymentRequirement === "FULL";
+    const initialStatus = requiresPayment ? "PENDING_PAYMENT" : "CONFIRMED";
 
     // 3. Atomic Transaction for Collision Prevention & Booking Creation
     const result = await db.$transaction(async (tx: any) => {
@@ -62,7 +70,7 @@ export async function POST(req: Request, { params }: RouteParams) {
             workingHours: true,
             timeOff: true,
             appointments: {
-              where: { status: "CONFIRMED" },
+              where: { status: { in: ["CONFIRMED", "PENDING_PAYMENT"] } },
               include: { service: true },
             },
           },
@@ -123,7 +131,7 @@ export async function POST(req: Request, { params }: RouteParams) {
             workingHours: true,
             timeOff: true,
             appointments: {
-              where: { status: "CONFIRMED" },
+              where: { status: { in: ["CONFIRMED", "PENDING_PAYMENT"] } },
               include: { service: true },
             },
           },
@@ -133,7 +141,7 @@ export async function POST(req: Request, { params }: RouteParams) {
           throw new Error("STAFF_NOT_FOUND");
         }
 
-        // Check collision against existing confirmed appointments
+        // Check collision against existing confirmed & pending payment appointments
         // Range overlap condition: requestedStart < existingEnd && requestedEnd > existingStart
         const overlappingAppointments = staff.appointments.filter((apt: any) => {
           const aptBuffer = apt.service?.bufferMin || 0;
@@ -163,22 +171,15 @@ export async function POST(req: Request, { params }: RouteParams) {
       }
 
       // 4. Find or create customer
-      let customer = null;
-      if (validatedData.customer.email) {
-        customer = await tx.customer.findFirst({
-          where: {
-            businessId: business.id,
-            email: validatedData.customer.email,
-          },
-        });
-      } else if (validatedData.customer.phone) {
-        customer = await tx.customer.findFirst({
-          where: {
-            businessId: business.id,
-            phone: validatedData.customer.phone,
-          },
-        });
-      }
+      let customer = await tx.customer.findFirst({
+        where: {
+          businessId: business.id,
+          OR: [
+            ...(validatedData.customer.email ? [{ email: validatedData.customer.email }] : []),
+            ...(validatedData.customer.phone ? [{ phone: validatedData.customer.phone }] : []),
+          ],
+        },
+      });
 
       if (!customer) {
         customer = await tx.customer.create({
@@ -190,7 +191,7 @@ export async function POST(req: Request, { params }: RouteParams) {
           },
         });
       } else {
-        // Update customer name if provided
+        // Update customer name/phone if provided
         customer = await tx.customer.update({
           where: { id: customer.id },
           data: {
@@ -200,7 +201,7 @@ export async function POST(req: Request, { params }: RouteParams) {
         });
       }
 
-      // 5. Create Appointment in UTC
+      // 5. Create Appointment in UTC with initial status (PENDING_PAYMENT if paid, CONFIRMED if unpaid)
       const appointment = await tx.appointment.create({
         data: {
           businessId: business.id,
@@ -209,8 +210,9 @@ export async function POST(req: Request, { params }: RouteParams) {
           customerId: customer.id,
           startsAt: requestedStart,
           endsAt: requestedEnd,
-          status: "CONFIRMED",
+          status: initialStatus,
           paymentStatus: "NONE",
+          paidAmountCents: 0,
           notes: validatedData.notes || null,
         },
         include: {
@@ -223,11 +225,105 @@ export async function POST(req: Request, { params }: RouteParams) {
       return appointment;
     });
 
-    return NextResponse.json({ success: true, appointment: result }, { status: 201 });
+    // 4. Post-Commit Flow Branching: Paid Services vs Unpaid Services
+    if (requiresPayment) {
+      // A. Enqueue 15-Minute Reservation Expiry Job
+      await enqueuePaymentTimeout(result.id, 15);
+
+      // B. Generate Stripe Checkout Session
+      const checkoutSession = await createCheckoutSession({
+        appointmentId: result.id,
+        business: {
+          id: business.id,
+          name: business.name,
+          slug: business.slug,
+          currency: business.currency,
+        },
+        service: {
+          name: result.service.name,
+          durationMin: result.service.durationMin,
+          priceCents: result.service.priceCents,
+          paymentRequirement: result.service.paymentRequirement as any,
+          depositAmountCents: result.service.depositAmountCents,
+        },
+        customer: {
+          name: result.customer.name,
+          email: result.customer.email,
+        },
+        startsAt: result.startsAt,
+      });
+
+      return NextResponse.json(
+        {
+          success: true,
+          appointment: result,
+          requiresPayment: true,
+          checkoutUrl: checkoutSession.checkoutUrl,
+          sessionId: checkoutSession.sessionId,
+          amountCents: checkoutSession.amountCents,
+          paymentType: checkoutSession.paymentType,
+        },
+        { status: 201 }
+      );
+    }
+
+    // Unpaid / Free Service: Post-Commit Notifications
+    try {
+      const cancellationToken = generateAppointmentToken({
+        appointmentId: result.id,
+        businessId: business.id,
+        startsAt: result.startsAt,
+      });
+
+      if (result.customer?.email) {
+        await dispatchBookingConfirmation({
+          business: {
+            id: business.id,
+            name: business.name,
+            slug: business.slug,
+            timezone: business.timezone,
+            currency: business.currency,
+          },
+          appointment: {
+            id: result.id,
+            startsAt: result.startsAt,
+            endsAt: result.endsAt,
+            notes: result.notes,
+          },
+          service: {
+            name: result.service.name,
+            durationMin: result.service.durationMin,
+            priceCents: result.service.priceCents,
+          },
+          staff: {
+            name: result.staff.name,
+            role: result.staff.role,
+          },
+          customer: {
+            name: result.customer.name,
+            email: result.customer.email,
+            phone: result.customer.phone,
+          },
+          cancellationToken,
+        });
+      }
+
+      // Enqueue scheduled reminders (skips negative delays automatically)
+      await enqueueAppointmentReminders({
+        appointmentId: result.id,
+        businessId: business.id,
+        startsAt: result.startsAt,
+      });
+    } catch (notifErr) {
+      console.warn("⚠️ Best-effort notification delivery error (booking creation unaffected):", notifErr);
+    }
+
+    return NextResponse.json({ success: true, appointment: result, requiresPayment: false }, { status: 201 });
   } catch (error: any) {
     console.error("Error creating appointment:", error);
 
-    if (error.message === "SLOT_UNAVAILABLE") {
+    // Translate application collisions, PostgreSQL 23P01 exclusion violations, and Prisma P2002/P2010 into 409 Conflict
+    if (isExclusionOrCollisionError(error)) {
       return NextResponse.json(
         {
           error: "That slot was just taken by another booking. Please choose another time.",

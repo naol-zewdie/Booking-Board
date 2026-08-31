@@ -15,6 +15,7 @@ import {
   Sparkles,
   CalendarCheck,
   ChevronRight,
+  BarChart3,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +54,11 @@ export function Sidebar({ business }: SidebarProps) {
       name: "Customers",
       href: "/dashboard/customers",
       icon: Users,
+    },
+    {
+      name: "Analytics",
+      href: "/dashboard/analytics",
+      icon: BarChart3,
     },
     {
       name: "Settings",

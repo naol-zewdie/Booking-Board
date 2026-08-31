@@ -61,7 +61,7 @@ export async function GET(req: Request, { params }: RouteParams) {
         timeOff: true,
         appointments: {
           where: {
-            status: "CONFIRMED",
+            status: { in: ["CONFIRMED", "PENDING_PAYMENT"] },
           },
           include: {
             service: true,

@@ -106,8 +106,10 @@ export function CustomerIntakeForm({
         return;
       }
 
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to confirm booking.");
+      if (data.requiresPayment && data.checkoutUrl) {
+        // Redirect to secure Stripe Checkout Session
+        window.location.href = data.checkoutUrl;
+        return;
       }
 
       onBookingSuccess(data.appointment);
@@ -222,11 +224,21 @@ export function CustomerIntakeForm({
             {isSubmitting ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Confirming Slot...</span>
+                <span>Processing...</span>
               </>
             ) : (
               <>
-                <span>Confirm & Book Appointment</span>
+                {service.paymentRequirement === "DEPOSIT" ? (
+                  <span>
+                    Pay {formatPrice(service.depositAmountCents || Math.round(service.priceCents * 0.3), currency)} Deposit & Reserve
+                  </span>
+                ) : service.paymentRequirement === "FULL" ? (
+                  <span>
+                    Pay {formatPrice(service.priceCents, currency)} & Book
+                  </span>
+                ) : (
+                  <span>Confirm & Book Appointment</span>
+                )}
                 <ArrowRight className="h-4 w-4" />
               </>
             )}
@@ -236,7 +248,7 @@ export function CustomerIntakeForm({
         {/* Right 1 Col: Live Order Summary Card */}
         <div className="space-y-4">
           <div className="p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 shadow-sm space-y-4 sticky top-6">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-primary-600 dark:text-primary-400">
                   Booking Summary
@@ -300,14 +312,25 @@ export function CustomerIntakeForm({
               </div>
             </div>
 
-            {/* Total Price */}
-            <div className="pt-3 border-t border-slate-200/80 dark:border-slate-800 flex items-center justify-between">
-              <span className="font-bold text-sm text-slate-900 dark:text-white">
-                Total Due
-              </span>
-              <span className="text-lg font-extrabold text-emerald-600 dark:text-emerald-400">
-                {formatPrice(service.priceCents, currency)}
-              </span>
+            {/* Total Price & Deposit Breakdown */}
+            <div className="pt-3 border-t border-slate-200/80 dark:border-slate-800 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 text-xs">Service Price</span>
+                <span className="font-bold text-slate-900 dark:text-white text-sm">
+                  {formatPrice(service.priceCents, currency)}
+                </span>
+              </div>
+
+              {service.paymentRequirement === "DEPOSIT" && (
+                <div className="flex items-center justify-between pt-1 border-t border-slate-100 dark:border-slate-800/60">
+                  <span className="font-bold text-xs text-primary-600 dark:text-primary-400">
+                    Deposit Due Today
+                  </span>
+                  <span className="text-base font-extrabold text-emerald-600 dark:text-emerald-400">
+                    {formatPrice(service.depositAmountCents || Math.round(service.priceCents * 0.3), currency)}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 text-[11px] text-slate-500 flex items-center gap-2">
